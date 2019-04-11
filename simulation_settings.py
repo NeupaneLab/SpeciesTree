@@ -39,4 +39,4 @@ rate_multiplier = 1. #rate_multiplier for vcv
 
 start_set = [[18], [37], [60], [73], [99], [114]]
 random_start_tree =  "(((E_pulverulenta:1.2,E_myrtilloides:1.2):1.15,(E_myrtoidea:0.05,E_rubra:0.05):2.3):1.25,(E_bifida:0.2,E_resinosa:0.2):3.4);"
-data_file = pd.read_csv("morphometrics2.csv")
+# data_file = pd.read_csv("morphometrics2.csv")

@@ -41,15 +41,16 @@ rate_multiplier = simulation_settings.rate_multiplier
 run_on_prior = simulation_settings.run_on_prior
 start_set =  simulation_settings.start_set
 random_start_tree = simulation_settings.random_start_tree
-data_file = simulation_settings.data_file
+simulate_morpho_data = simulation_settings.simulate_morpho_data
+# data_file = simulation_settings.data_file
 
 np.random.seed(7765219)
 shuffle_nu = 4000
 
-if simulate_morpho_data:
-    data_size = simulation_settings.data_size
-    define_sets = simulation_settings.define_sets
-    morpho_sigma = simulation_settings.morpho_sigma
+# if simulate_morpho_data:
+data_size = simulation_settings.data_size
+define_sets = simulation_settings.define_sets
+morpho_sigma = simulation_settings.morpho_sigma
 
 
 
