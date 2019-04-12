@@ -6,7 +6,6 @@ import scipy as sp
 from scipy.stats import norm
 from scipy.stats import multivariate_normal as mvn
 #from random import randrange, uniform
-
 # from statistics import variance
 import itertools
 import random
@@ -42,6 +41,8 @@ run_on_prior = simulation_settings.run_on_prior
 start_set =  simulation_settings.start_set
 random_start_tree = simulation_settings.random_start_tree
 simulate_morpho_data = simulation_settings.simulate_morpho_data
+morpho_means = simulation_settings.morpho_means
+simulate_means_from_root_mean = simulation_settings.simulate_means_from_root_mean
 # data_file = simulation_settings.data_file
 
 np.random.seed(7765219)
@@ -74,12 +75,17 @@ def getvcv(tre):
 sim_cov = getvcv(random_start_tree)* rate_multiplier
 
 #generate starting means under brownian motion with mean = sim_root_brow and VCV = sim_cov
+
 def simulate_mean(rate_multiplier):    
     rand_simulated_data = mvn.rvs(mean = sim_root_brow, cov=sim_cov, size = 1)
     return rand_simulated_data
 
-rand_simulated_means = simulate_mean(rate_multiplier) # rate_multiplier scales VCV matrix with rate_multiplier =1 as all edge-lengths are exactly converted  to VCV 
-print 'rand_simulated_means=', rand_simulated_means
+if simulate_means_from_root_mean:
+    rand_simulated_means = simulate_mean(rate_multiplier) # rate_multiplier scales VCV matrix with rate_multiplier =1 as all edge-lengths are exactly converted  to VCV
+else:
+    rand_simulated_means = morpho_means
+# rand_simulated_means = simulate_mean(rate_multiplier) # rate_multiplier scales VCV matrix with rate_multiplier =1 as all edge-lengths are exactly converted  to VCV 
+# print 'rand_simulated_means=', rand_simulated_means
 
 #simulating data for each tip with means generated under brownian motion (by executing function simulate_mean), parameter with size = data_size, and sigmas as morpho_sigma
 def simulate_data(n):
@@ -472,7 +478,7 @@ def getPreorder(nd, start = True):
     return blen
 
 
-# 
+# split edge to get new topology during birth-death process 
 def splitTree(t2,pick):
     addedge = getPreorder(pick, start = True)
     no = str(pick.number)
@@ -488,7 +494,7 @@ def splitTree(t2,pick):
     return t4
 
 
-    
+# collapse edges to get new topology during birth-death process
 def collapseTree(tree2, pick):
     m1 = re.search('\(%s\:([0-9]*[.]?[0-9]+)'%(pick.par.lchild.number),tree2)
     if pick.par.number == -1:
@@ -511,7 +517,7 @@ def collapseTree(tree2, pick):
     return tree4
 
 
-
+# computing log-likelihood for root using VCV 
 def brow_jointLnLike(confset, means, topology, browia_mean ):
     num_lineages = len(confset)
     means_for_brow = [browia_mean] * num_lineages
@@ -526,29 +532,35 @@ def brow_jointLnLike(confset, means, topology, browia_mean ):
     lgdensity_on_brow = mvn.logpdf(data_means, mean=means_for_brow, cov=vcv)
     return lgdensity_on_brow
 
-
+# moves on mean, variance, sets, root mean
 def moves(pick, movetype):
     if movetype == 'mean':
         print '_MOVE MEAN_______________________________________________'
 
-        print 'node.partial_mean before change', node.partial_means
-
+        print 'node.partial_mean before change', node.partial_means # dictionary of means with the associated nodes (internal as negative value and external as positive values)
+		#randomly choose the node and its mean for the move
         mean = node.partial_means.get(pick.number)
         sigma = node.partial_sigmas.get(pick.number)
         u = random.random()
         node.delta1 = uniform(0,10)
         node.lam1 = 0
+        
+        print node.delta1, node.lam1
         mean_new = mean-node.delta1/2.+node.delta1*u
         
+        #update the dictionary with mean_new using sliding window
         node.partial_means[pick.number]= mean_new
         print 'node.partial_mean after change', node.partial_means
         
+        #get the joint mean prior log log-densities for 
         proposed_mean_ln_prior_density = jointMeanLnprior(node.confset, node.partial_means)
         
-        if run_on_prior:
+        
+        if run_on_prior: #exclude likelihood from the posterior in the run involving only prior
             proposed_ln_posterior =    proposed_mean_ln_prior_density + node.current_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density
         else:
 #             print '/////////////////////////START'
+			# log-likelihood of the means for the simulated data
             proposed_ln_like = jointLnLike(node.confset, node.partial_means,node.partial_sigmas)
 
             if pick.number == -1:
@@ -563,16 +575,15 @@ def moves(pick, movetype):
                 print node.vcv
                 proposed_brow_ln_like = brow_jointLnLike(node.confset, node.partial_means, node.current_topology, node.brow_mean)
 #             print '/////////////////////////END'
-        
+        	# log-likelihood of the root mean for the simulated data
             proposed_ln_posterior =  proposed_ln_like + proposed_brow_ln_like +  proposed_mean_ln_prior_density + node.current_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density
 
-#         hastings_ratio = log(m)
-#         logR = proposed_ln_posterior - node.current_ln_posterior + hastings_ratio
+		# acceptance ratio
         logR = proposed_ln_posterior - node.current_ln_posterior 
 #         print 'ln_like before and after mean move =========......>>>', node.current_ln_like, proposed_ln_like
         
         print 'proposed_ln_posterior, current_ln_posterior', proposed_ln_posterior, node.current_ln_posterior
-        print 'proposed_mean_ln_prior_density node.current_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density =', proposed_mean_ln_prior_density, node.current_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density
+        print 'proposed_mean_ln_prior_density node.current_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density =', proposed_mean_ln_prior_density, node.current_sigma_ln_prior_density, node.current_brow_mean_ln_prior_density
 
         u = random.random()
         print 'log(u) logR ==',  log(u), logR
@@ -589,15 +600,20 @@ def moves(pick, movetype):
 
         else:
             node.types = 'Reject'
-            node.partial_means[pick.number] = mean
+            node.partial_means[pick.number] = mean # if new_mean rejected, restore the original mean into the dictionary of means 
             print 'REJECT, log(u) > logR, new proposal...mean =', mean
         print '              **********************************'
  
         print       
 
     elif movetype == 'brown_mean':
+    	#this move is similar to move on individual means but in this case there is only one parameter (root mean) to be updated every-time
         print '_MOVE BROWN MEAN_______________________________________________'
-
+        print 'node.partial_means', node.partial_means
+        print 'node.partial_sigmas', node.partial_sigmas
+        print 'mean_ln_prior_density',jointMeanLnprior(node.confset, node.partial_means)
+        print 'sigma_ln_prior_density', jointSigmaLnprior(node.confset, node.partial_sigmas)
+        
         brow_mean = node.brow_mean
         u = random.random()
         node.delta1 = uniform(0,10)
@@ -605,6 +621,7 @@ def moves(pick, movetype):
         brow_mean_new = brow_mean-node.delta1/2.+node.delta1*u
         proposed_brow_mean_ln_prior_density =  joint_brow_mean(brow_mean_new)
         
+        print node.delta1, node.lam1
         print 'brow_mean, brow_mean_new==', brow_mean, brow_mean_new
         
         if run_on_prior:
@@ -615,7 +632,7 @@ def moves(pick, movetype):
 #             print '/////////////////////////START'
             if pick.number == -1:
                 me = node.brow_mean
-                si = sqrt(3.6*rate_multiplier)
+                si = sqrt(3.6*rate_multiplier) #3.6 is the tree height for this particular example tree (will write a function later to automatically plug in the tree height on the given tree later) , In the all collapsed case there is no co-variance so the variance = tree height , I need to write a function to get a tree
                 data = node.partial_means.get(pick.number)
             
                 proposed_brow_ln_like = norm(me, si).logpdf(data) 
@@ -623,7 +640,7 @@ def moves(pick, movetype):
 #                 print 'me, si, data, proposed_brow_ln_like=', me, si, data, proposed_brow_ln_like 
 
             else:
-                node.vcv = getvcv(node.current_topology)
+                node.vcv = getvcv(node.current_topology) #get vcv from the given topology 
                 print node.vcv
                 proposed_brow_ln_like = brow_jointLnLike(node.confset, node.partial_means, node.current_topology, brow_mean_new)
 #                 print 'proposed_brow_ln_like ==', proposed_brow_ln_like
@@ -657,6 +674,7 @@ def moves(pick, movetype):
     
     elif movetype == 'sigma':
         print '_MOVE SIGMA_______________________________________________'
+    	#this move is similar to move on individual means but in this case the sigmas are changed using multiplier instead of sliding-window proposal
 
         mean = node.partial_means.get(pick.number)
         sigma = node.partial_sigmas.get(pick.number)
@@ -666,6 +684,8 @@ def moves(pick, movetype):
         node.lam1 = uniform(0,10)
         node.delta1 = 0
         
+        print node.delta1, node.lam1
+
         u = random.random()
         m = exp(node.lam1*(u-0.5))
         sigma_new = sigma * m
@@ -720,42 +740,30 @@ def moves(pick, movetype):
 
         else:
             node.types = 'Reject'
-            node.partial_sigmas[pick.number] = sigma
-            print 'REJECT, log(u) > logR, new proposal...sigma =', sigma
+            node.partial_sigmas[pick.number] = sigma #restore original sigma if the sigma_new proposal is rejected
+            print 'REJECT, log(u) > logR, new proposal...sigma =', sigma 
         print '***************************************************'
         print
 
+	# collapse move
     elif movetype == 'movedown':
-        print '_MOVE DOWN_______________________________________________'
+        print '_MOVE DOWN_______________________________________________' 
         node.delta1 = uniform(0,10)
         node.lam1 = uniform(0,10)
         
+        print node.delta1, node.lam1
         
+        #get current topology
         topology = node.current_topology[:]
+
+        #collapse topology
         node.collapse_topology = collapseTree(topology, pick)
         
 
-
-        prob_movedown = 0
-        prob_moveup = 0
-
-        
-        if pick.number > 1:
-            prob_movedown += 1
-            
-        else:
-            prob_movedown += 1/2.
-        
-        if pick.par.number == -1:
-            prob_moveup += 1
-        
-        else:
-            prob_moveup += 1/2.
-# 
         print' node.partial_means before collapsed =', node.partial_means
         print' node.partial_sigmas before collapsed=', node.partial_sigmas
 
-
+		#new set after the topology is collapsed
         new_confset = node.confset[:]
         nodeadd = pick.par.number
         nodel = contained_tips[pick.par.lchild.number]
@@ -767,33 +775,37 @@ def moves(pick, movetype):
         new_confset.remove(nodelrisb)
         print 'new_confset =',  new_confset
         
+        #current mean for the collapsed edge
         mean_old = node.partial_means[pick.par.number]
         sigma_old = node.partial_sigmas[pick.par.number]
         
+        #current means and sigmas of the cherries that were randomly selected to collapse
         mean_cherries = [node.partial_means.get(pick.par.lchild.number), node.partial_means.get(pick.par.lchild.rsib.number)]
         sigma_cherries = [node.partial_sigmas.get(pick.par.lchild.number), node.partial_sigmas.get(pick.par.lchild.rsib.number)]
         
+        #randomly choose mean and sigma one of the cherries to update the mean and sigma for collapsed edge
         mean_new_chosen = random.choice([node.partial_means.get(pick.par.lchild.number), node.partial_means.get(pick.par.lchild.rsib.number)])
         sigma_new_chosen = random.choice([node.partial_sigmas.get(pick.par.lchild.number), node.partial_sigmas.get(pick.par.lchild.rsib.number)])
 
 
-
+		#change the randomly chosen mean using sliding window  
         v = random.random()
         mean_new1 = mean_new_chosen - node.delta1/2.+ node.delta1*v
 
-
+		#change the randomly chosen sigma using sliding window  
         w = random.random()
         vv2 = sigma_new_chosen - node.lam1/2.+ node.lam1*w
         if vv2 < 0.0:
             vv2 = -vv2
         sigma_new1 = vv2
 
-        
+		#assign  mean_new1 and sigma_new1 to the collapsed node by replacing original mean_old and sigma_old        
         node.partial_means[pick.par.number]= mean_new1
         node.partial_sigmas[pick.par.number]= sigma_new1
         print' node.partial_means after collapsed =', node.partial_means
         print' node.partial_sigmas after collapsed=', node.partial_sigmas
 
+		# getting  number of available nodes to collapse or split in that particular set (n_c, n_s) and the collapsed state (n_p_c, n_p_s), this will be used in  log_proposalRatio
         n_c = num_nodes_can_combine(node.confset)
         n_s = 0.0
         for m in node.confset:
@@ -814,13 +826,15 @@ def moves(pick, movetype):
         print 'topology=',  topology
         print 'node.collapse_topology=',  node.collapse_topology
 
+		# getting new log-densities of priors (mean, sigma) for the collapsed set since the mean and sigma change   
         proposed_mean_ln_prior_density = jointMeanLnprior(new_confset, node.partial_means)
         proposed_sigma_ln_prior_density = jointSigmaLnprior(new_confset, node.partial_sigmas)
  
         log_proposalRatio = (log(n_c+n_s))-(log(n_p_c + n_p_s)+log(node.delta1)+log(node.lam1))
         log_Jacobian = -log(node.delta1)-log(node.lam1)
 #         print 'log_Jacobian==', log_Jacobian
-
+		
+		
         if run_on_prior:
             proposed_ln_posterior =   proposed_mean_ln_prior_density + proposed_sigma_ln_prior_density + node.current_brow_mean_ln_prior_density
         else:
@@ -863,12 +877,14 @@ def moves(pick, movetype):
                 node.current_ln_like = proposed_ln_like
             node.current_ln_posterior = proposed_ln_posterior
             node.current_topology = node.collapse_topology
+            node.current_mean_ln_prior_density = proposed_mean_ln_prior_density
+            node.current_sigma_ln_prior_density  = proposed_sigma_ln_prior_density
             print 'ACCEPT, log(u) < logR, new proposal...mean =', new_confset, mean_new1
 
         else:
             node.types = 'Reject'
-            node.partial_means[pick.par.number]= mean_old
-            node.partial_sigmas[pick.par.number]= sigma_old
+            node.partial_means[pick.par.number]= mean_old #restore old mean in the collapsed edge if the move is rejected
+            node.partial_sigmas[pick.par.number]= sigma_old #restore old mean in the collapsed edge if the move is rejected
 #             node.partial_means[pick.par.number] = mean
 #             node.partial_sigmas[pick.par.number] = sigma
             print 'REJECT, log(u) > logR, new proposal...mean =', node.confset
@@ -876,44 +892,35 @@ def moves(pick, movetype):
 
         print
 
- 
+	#split move 
     elif movetype == 'moveup':
     
         print '_MOVE UP_______________________________________________', node.confset
 
         node.delta1 = uniform(0,10)
         node.lam1 = uniform(0,10)
-    
+
+        print node.delta1, node.lam1
+    	
+    	#get the current topology 
         topology = node.current_topology[:]
+        #get the topology after split move
         node.split_topology = splitTree(topology, pick)
-        prob_movedown = 0
-        prob_moveup = 0
-        
-        if pick.number == -1:
-            prob_moveup +=1
-            
-        else:
-            prob_moveup += 1/2.
-        
-        if pick.lchild.number > 0:
-            prob_movedown += 1
-        
-        else:
-            prob_movedown += 1/2.
-    
-    
+    	
+    	#get children ids
         lchild = contained_tips.get(pick.lchild.number)
         rsib = contained_tips.get(pick.lchild.rsib.number)
         current_node = contained_tips.get(pick.number)
         tmp_confset = node.confset[:]
         new_confset =  tmp_confset[:tmp_confset.index(current_node)]+[lchild]+[rsib]+node.confset[node.confset.index(current_node):]
         new_confset.remove(current_node)
-        print 'new_confset==', new_confset
+        print 'new_confset==', new_confset #change set after the split move
  
         print 'node.partial_means before split=', node.partial_means
         print 'node.partial_sigmas before split=', node.partial_sigmas
  
  
+		# getting  number of available nodes to collapse or split in that particular set (n_c, n_s) and the split state (n_p_c, n_p_s), this will be used in  log_proposalRatio
        
         if pick.number == -1:
             n_c = 0
@@ -932,14 +939,16 @@ def moves(pick, movetype):
         for m in new_confset:
             if len(m)>1:
                 n_p_s+=1
-        
+        #getting mean and sigma of the node that is to be split
         current_mean = node.partial_means.get(pick.number)
         current_sigma = node.partial_sigmas.get(pick.number)
+
+		# propose new means for the children where one of the cherries inherits the parent mean and the other gets the changed the parent mean using sliding window  
         v = random.random()
         child_means = [current_mean, current_mean - node.delta1/2.+ node.delta1*v]
         print 'child_means=', child_means
 
-
+		# propose new sigmas for the children where one of the cherries inherits the parent sigma and the other  gets changes parent sigma using sliding window  
         w = random.random()
         vv = current_sigma - node.lam1/2.+ node.lam1*w
 #         print 'vv==', vv
@@ -948,11 +957,11 @@ def moves(pick, movetype):
         child_sigmas = [current_sigma, vv]
         print 'child_sigma=', child_sigmas
 
-#         print '_____MOVE UP_____num_nodes_can_split, num_node_sets_can_combine ', num_nodes_can_split, num_node_sets_can_combine 
-        
+        #get the existing means and sigmas of the cherries from the earlier moves to be replaced if the split move is rejected
         left_right_means = [node.partial_means.get(pick.lchild.number), node.partial_means.get(pick.lchild.rsib.number)]
         left_right_sigmas = [node.partial_sigmas.get(pick.lchild.number), node.partial_sigmas.get(pick.lchild.rsib.number)]
         
+        #pick one of the cherries randomly to be replaced by child_means[0] and other by child_means[1], same with sigmas replacement 
         lrnode_list = [pick.lchild.number, pick.lchild.rsib.number]
         ranchoice = random.choice(lrnode_list)
         
@@ -960,7 +969,6 @@ def moves(pick, movetype):
         node.partial_sigmas[ranchoice] = child_sigmas[0]
         
         lrnode_list.remove(ranchoice)
-
         node.partial_means[lrnode_list[0]] = child_means[1]
         node.partial_sigmas[lrnode_list[0]] = child_sigmas[1]
         
@@ -970,9 +978,9 @@ def moves(pick, movetype):
 
         print topology
         print node.split_topology
- 
-        proposed_mean_ln_prior_density = jointMeanLnprior(new_confset, node.partial_means)
 
+		# getting new log-densities of priors (mean, sigma) for the split set since the mean and sigma change   
+        proposed_mean_ln_prior_density = jointMeanLnprior(new_confset, node.partial_means)
         proposed_sigma_ln_prior_density = jointSigmaLnprior(new_confset, node.partial_sigmas)
         
         log_proposalRatio = (log(n_c+ n_s) + log(node.delta1)+log(node.lam1)) - (log(n_p_c+n_p_s))
@@ -1008,6 +1016,9 @@ def moves(pick, movetype):
                 node.current_ln_like = proposed_ln_like
             node.current_ln_posterior = proposed_ln_posterior
             node.current_topology = node.split_topology
+            node.current_mean_ln_prior_density = proposed_mean_ln_prior_density
+            node.current_sigma_ln_prior_density  = proposed_sigma_ln_prior_density
+            
             print 'ACCEPT, log(u) < logR, new proposal...mean =', new_confset
 
         else:
@@ -1022,10 +1033,11 @@ def moves(pick, movetype):
         print
 
 def exploreNodes(mega_list, n_gen):
-#    old_stdout = sys.stdout
-#    log_file = open("message.log.txt","w")
-#    sys.stdout = log_file
-
+	#starting vallues for mcmc
+#     old_stdout = sys.stdout
+#     log_file = open("message.log.txt","w")
+#     sys.stdout = log_file
+    
     start_morphs = []
     node.partial_morphos = node_values()[0]
     #print 'node.partial_morphos==', node.partial_morphos
@@ -1094,39 +1106,23 @@ def exploreNodes(mega_list, n_gen):
 
     output = os.path.join('model.txt')
 
-#     newf2 = open(output, 'w')
-#     newf2.write('%s\t%s\n\n'%('data-generating means from brownian motion=', str(rand_simulated_means)))
-#     newf2.write('%s\t'%('n_gen'))
-#     for i in (node.confset):
-#         newf2.write('%s\t'%(i))
-#     newf2.write('\n')
 
     output3 = os.path.join('model.txt')
     newf2 = open(output3, 'w')
     newf2.write('%s\t'%('n_gen'))
+    if run_on_prior == False:
+        newf2.write('%s\t%s\n\n'%('data-generating means from brownian motion=', str(rand_simulated_means)))
     for i in (node.confset):
         newf2.write('%s\t'%(i))
     newf2.write('\n')
 
 
-#     output2 = os.path.join('posterior_samples.txt')
-#     newf3 = open(output2, 'w')
-#     newf3.write(' **********starting values ******************************************************\n')
-#     newf3.write('Starting_topology=%s\t\n\n'%(node.current_topology))
-#     newf3.write('%s\t\n\n'%(node.vcv))
-#     newf3.write('#############################\n')
-#     newf3.write('#####log-prior-densities#####\n')
-#     newf3.write('node.current_mean_ln_prior_density = %s\t\n'%(node.current_mean_ln_prior_density))
-#     newf3.write('node.current_sigma_ln_prior_density = %s\t\n'%(node.current_sigma_ln_prior_density))
-#     newf3.write('node.current_brow_mean_ln_prior_density = %s\t\n'%(node.current_brow_mean_ln_prior_density))
-#     newf3.write('\n')
-
-    #print
-    #print
     list_of_sets = []
 
+	#mcmc runs start here
     for i in range(n_gen):
         pick = random.choice(postorder)
+        print
         print 'iter and picked node#########################################################################################################################################################>', i+1, pick.number
         print 'pick.number=>', pick.number
         
@@ -1201,7 +1197,6 @@ def exploreNodes(mega_list, n_gen):
 
 
         if node.types == ('Accept') or node.types ==  ('Reject'):
-#             print 'yeeeeeeeeeeeeeeeeeee', node.types
 
             if (i+1) % save_every == 0:
                 newf2.write('%s\t'%(mcmc+1))
@@ -1210,8 +1205,6 @@ def exploreNodes(mega_list, n_gen):
                 for i,list in enumerate(node.confset):
                     collt.append([i+1]*(len(list)))
             
-            
- 
                 for i in collt:
                     newf2.write(('%s\t\t') %("       ".join(str(x) for x in i)))
                 
@@ -1221,21 +1214,6 @@ def exploreNodes(mega_list, n_gen):
         else:
             pass
         print
-#             set_string = " ".join(str(x) for x in node.confset)
-#             list_of_sets.append(set_string)
-
-#             newf3.write('\n')
-#             newf3.write('iter and picked node ###################################################################################>%s\t%s\t\n'%(mcmc+1,pick.number))
-#             newf3.write('%s\n'%(movetype))
-#             newf3.write('ACCEPT or REJECT or PASS ==> %s\t\n\n'%(node.types))
-#             newf3.write('Accepted_topology=%s\t\n\n'%(node.current_topology))
-#             newf3.write('%s\t\n\n'%(node.vcv))
-#             newf3.write('#############################\n')
-#             newf3.write('#####log-prior-densities#####\n')
-#             newf3.write('node.current_mean_ln_prior_density = %s\t\n'%(node.current_mean_ln_prior_density))
-#             newf3.write('node.current_sigma_ln_prior_density = %s\t\n'%(node.current_sigma_ln_prior_density))
-#             newf3.write('node.current_brow_mean_ln_prior_density = %s\t\n'%(node.current_brow_mean_ln_prior_density))
-
 
 
 
@@ -1252,8 +1230,8 @@ def exploreNodes(mega_list, n_gen):
         newf2.write('%s\t%.6f\t\t\n'%(ele, float(myDict[ele])/float(numadd)))
 #         print float(myDict[ele])/float(numadd)
 
-#    sys.stdout = old_stdout
-#    log_file.close()
+#    	sys.stdout = old_stdout
+#    	log_file.close()
 
 
 if __name__ == '__main__':
