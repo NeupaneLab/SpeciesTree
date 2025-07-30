@@ -993,7 +993,7 @@ def moves(pick, movetype):
             proposed_ln_like = jointLnLike(new_confset, node.partial_means,node.partial_sigmas)
         
 #             print '/////////////////////////START'
-            node.vcv = getvcv(node.collapse_topology)
+            node.vcv = getvcv(node.split_topology)
             print node.vcv
             proposed_brow_ln_like = brow_jointLnLike(new_confset, node.partial_means, node.split_topology, node.brow_mean)
 #             print 'proposed_brow_ln_like==', proposed_brow_ln_like
